@@ -957,7 +957,255 @@ chain_ask_server() {
     is_chain_port=$is_chain_p
 }
 
+chain_decode_base64() {
+    is_chain_base64=$(sed 's/-/+/g;s/_/\//g;s/#.*//;s/?*$//' <<<$1)
+    case $((${#is_chain_base64} % 4)) in
+    2)
+        is_chain_base64="${is_chain_base64}=="
+        ;;
+    3)
+        is_chain_base64="${is_chain_base64}="
+        ;;
+    esac
+    base64 -d <<<$is_chain_base64 2>/dev/null || base64 -D <<<$is_chain_base64 2>/dev/null
+}
+
+chain_url_decode() {
+    local data=${1//+/ }
+    printf '%b' "${data//%/\\x}"
+}
+
+chain_url_value() {
+    local key=$1
+    local query=$2
+    local value=$(sed 's/&/\n/g' <<<$query | sed -n "s/^${key}=//p" | head -n1)
+    [[ $value ]] && chain_url_decode "$value"
+}
+
+chain_parse_host_port() {
+    local server=$1
+    if [[ $server =~ ^\[(.*)\]:([0-9]+)$ ]]; then
+        is_chain_addr=${BASH_REMATCH[1]}
+        is_chain_p=${BASH_REMATCH[2]}
+    else
+        is_chain_addr=${server%:*}
+        is_chain_p=${server##*:}
+    fi
+}
+
+chain_require_host_port() {
+    [[ ! $is_chain_addr || ! $is_chain_p || $is_chain_addr == "$is_chain_p" ]] && err "无法从节点链接读取上游地址和端口."
+    [[ ! $(is_test port $is_chain_p) ]] && err "节点链接中的端口无效: $is_chain_p"
+    is_chain_port=$is_chain_p
+}
+
+chain_build_stream_json() {
+    is_chain_security=$(chain_url_value security "$is_chain_query")
+    is_chain_tls=$(chain_url_value tls "$is_chain_query")
+    [[ ! $is_chain_security && $is_chain_tls == 'tls' ]] && is_chain_security=tls
+    [[ ! $is_chain_security ]] && is_chain_security=none
+    is_chain_type=$(chain_url_value type "$is_chain_query")
+    [[ ! $is_chain_type ]] && is_chain_type=tcp
+    is_chain_host=$(chain_url_value host "$is_chain_query")
+    is_chain_sni=$(chain_url_value sni "$is_chain_query")
+    [[ ! $is_chain_sni ]] && is_chain_sni=$(chain_url_value peer "$is_chain_query")
+    [[ ! $is_chain_sni ]] && is_chain_sni=$is_chain_host
+    [[ ! $is_chain_host ]] && is_chain_host=$is_chain_sni
+    is_chain_path=$(chain_url_value path "$is_chain_query")
+    is_chain_service_name=$(chain_url_value serviceName "$is_chain_query")
+    is_chain_public_key=$(chain_url_value pbk "$is_chain_query")
+    is_chain_short_id=$(chain_url_value sid "$is_chain_query")
+    is_chain_fingerprint=$(chain_url_value fp "$is_chain_query")
+    is_chain_flow=$(chain_url_value flow "$is_chain_query")
+    [[ ! $is_chain_fingerprint ]] && is_chain_fingerprint=chrome
+    is_chain_stream=$(jq -n \
+        --arg network "$is_chain_type" \
+        --arg security "$is_chain_security" \
+        --arg sni "$is_chain_sni" \
+        --arg host "$is_chain_host" \
+        --arg path "$is_chain_path" \
+        --arg service "$is_chain_service_name" \
+        --arg pbk "$is_chain_public_key" \
+        --arg sid "$is_chain_short_id" \
+        --arg fp "$is_chain_fingerprint" '
+        {network:$network}
+        + (if $security == "none" or $security == "" then {} else {security:$security} end)
+        + (if $security == "tls" then {tlsSettings:({} + (if $sni != "" then {serverName:$sni} else {} end))} else {} end)
+        + (if $security == "reality" then {realitySettings:({fingerprint:$fp,publicKey:$pbk,shortId:$sid} + (if $sni != "" then {serverName:$sni} else {} end))} else {} end)
+        + (if $network == "ws" then {wsSettings:({path:$path} + (if $host != "" then {headers:{Host:$host}} else {} end))} else {} end)
+        + (if $network == "grpc" then {grpcSettings:{serviceName:$service}} else {} end)
+        + (if $network == "xhttp" or $network == "splithttp" then {xhttpSettings:({path:$path} + (if $host != "" then {host:$host} else {} end))} else {} end)
+    ')
+}
+
+chain_parse_share_link() {
+    is_chain_link=$1
+    is_chain_scheme=${is_chain_link%%://*}
+    is_chain_body=${is_chain_link#*://}
+    is_chain_body_no_name=${is_chain_body%%#*}
+    is_chain_query=
+    [[ $is_chain_body_no_name == *\?* ]] && is_chain_query=${is_chain_body_no_name#*\?}
+    case ${is_chain_scheme,,} in
+    ss)
+        is_chain_ss_body=${is_chain_body_no_name%%\?*}
+        if [[ $is_chain_ss_body == *@* ]]; then
+            is_chain_userinfo=${is_chain_ss_body%@*}
+            is_chain_server=${is_chain_ss_body#*@}
+            if [[ $is_chain_userinfo == *:* ]]; then
+                is_chain_method=${is_chain_userinfo%%:*}
+                is_chain_pass=${is_chain_userinfo#*:}
+            else
+                is_chain_decoded=$(chain_decode_base64 "$is_chain_userinfo")
+                is_chain_method=${is_chain_decoded%%:*}
+                is_chain_pass=${is_chain_decoded#*:}
+            fi
+        else
+            is_chain_decoded=$(chain_decode_base64 "$is_chain_ss_body")
+            is_chain_userinfo=${is_chain_decoded%@*}
+            is_chain_server=${is_chain_decoded#*@}
+            is_chain_method=${is_chain_userinfo%%:*}
+            is_chain_pass=${is_chain_userinfo#*:}
+        fi
+        chain_parse_host_port "$is_chain_server"
+        chain_require_host_port
+        is_chain_method=$(chain_url_decode "$is_chain_method")
+        is_chain_pass=$(chain_url_decode "$is_chain_pass")
+        [[ ! $is_chain_method || ! $is_chain_pass ]] && err "无法从 Shadowsocks 链接读取加密方式或密码."
+        is_chain_protocol=shadowsocks
+        is_chain_outbound=$(jq -n \
+            --arg addr "$is_chain_addr" \
+            --argjson port "$is_chain_port" \
+            --arg method "$is_chain_method" \
+            --arg pass "$is_chain_pass" \
+            '{protocol:"shadowsocks",settings:{servers:[{address:$addr,port:$port,method:$method,password:$pass}]}}')
+        ;;
+    socks | socks5 | http)
+        is_chain_protocol=${is_chain_scheme,,}
+        [[ $is_chain_protocol == 'socks5' ]] && is_chain_protocol=socks
+        is_chain_server=${is_chain_body_no_name%%\?*}
+        if [[ $is_chain_server != *@* && $is_chain_server != *:* ]]; then
+            is_chain_decoded=$(chain_decode_base64 "$is_chain_server")
+            [[ $is_chain_decoded ]] && is_chain_server=$is_chain_decoded
+        fi
+        if [[ $is_chain_server == *@* ]]; then
+            is_chain_userinfo=${is_chain_server%@*}
+            is_chain_server=${is_chain_server#*@}
+            is_chain_user=${is_chain_userinfo%%:*}
+            is_chain_pass=${is_chain_userinfo#*:}
+            is_chain_user=$(chain_url_decode "$is_chain_user")
+            is_chain_pass=$(chain_url_decode "$is_chain_pass")
+        fi
+        chain_parse_host_port "$is_chain_server"
+        chain_require_host_port
+        if [[ $is_chain_user ]]; then
+            is_chain_outbound=$(jq -n \
+                --arg protocol "$is_chain_protocol" \
+                --arg addr "$is_chain_addr" \
+                --argjson port "$is_chain_port" \
+                --arg user "$is_chain_user" \
+                --arg pass "$is_chain_pass" \
+                '{protocol:$protocol,settings:{servers:[{address:$addr,port:$port,users:[{user:$user,pass:$pass}]}]}}')
+        else
+            is_chain_outbound=$(jq -n \
+                --arg protocol "$is_chain_protocol" \
+                --arg addr "$is_chain_addr" \
+                --argjson port "$is_chain_port" \
+                '{protocol:$protocol,settings:{servers:[{address:$addr,port:$port}]}}')
+        fi
+        ;;
+    vless)
+        is_chain_protocol=vless
+        is_chain_userinfo=${is_chain_body_no_name%@*}
+        is_chain_server=${is_chain_body_no_name#*@}
+        is_chain_server=${is_chain_server%%\?*}
+        is_chain_uuid=$(chain_url_decode "$is_chain_userinfo")
+        [[ ! $(is_test uuid $is_chain_uuid) ]] && err "VLESS 链接中的 UUID 无效."
+        chain_parse_host_port "$is_chain_server"
+        chain_require_host_port
+        chain_build_stream_json
+        is_chain_outbound=$(jq -n \
+            --arg addr "$is_chain_addr" \
+            --argjson port "$is_chain_port" \
+            --arg uuid "$is_chain_uuid" \
+            --arg flow "$is_chain_flow" \
+            --argjson stream "$is_chain_stream" \
+            '{protocol:"vless",settings:{vnext:[{address:$addr,port:$port,users:[({id:$uuid,encryption:"none"} + (if $flow != "" then {flow:$flow} else {} end))]}]},streamSettings:$stream}')
+        ;;
+    vmess)
+        is_chain_vmess_json=$(chain_decode_base64 "$is_chain_body_no_name")
+        if ! jq -e . &>/dev/null <<<$is_chain_vmess_json; then
+            err "无法解析 VMess 链接."
+        fi
+        is_chain_addr=$(jq -r '.add // empty' <<<$is_chain_vmess_json)
+        is_chain_p=$(jq -r '.port // empty' <<<$is_chain_vmess_json)
+        is_chain_uuid=$(jq -r '.id // empty' <<<$is_chain_vmess_json)
+        is_chain_aid=$(jq -r '.aid // "0"' <<<$is_chain_vmess_json)
+        is_chain_type=$(jq -r '.net // "tcp"' <<<$is_chain_vmess_json)
+        is_chain_security=$(jq -r '.tls // "none"' <<<$is_chain_vmess_json)
+        [[ $is_chain_security == "" ]] && is_chain_security=none
+        is_chain_sni=$(jq -r '.sni // .host // empty' <<<$is_chain_vmess_json)
+        is_chain_host=$(jq -r '.host // .sni // empty' <<<$is_chain_vmess_json)
+        is_chain_path=$(jq -r '.path // empty' <<<$is_chain_vmess_json)
+        is_chain_service_name=$is_chain_path
+        is_chain_query="security=$is_chain_security&type=$is_chain_type&sni=$is_chain_sni&host=$is_chain_host&path=$is_chain_path&serviceName=$is_chain_service_name"
+        [[ ! $(is_test uuid $is_chain_uuid) ]] && err "VMess 链接中的 UUID 无效."
+        chain_require_host_port
+        chain_build_stream_json
+        is_chain_outbound=$(jq -n \
+            --arg addr "$is_chain_addr" \
+            --argjson port "$is_chain_port" \
+            --arg uuid "$is_chain_uuid" \
+            --arg aid "$is_chain_aid" \
+            --argjson stream "$is_chain_stream" \
+            '{protocol:"vmess",settings:{vnext:[{address:$addr,port:$port,users:[{id:$uuid,alterId:($aid | tonumber? // 0)}]}]},streamSettings:$stream}')
+        ;;
+    trojan)
+        is_chain_protocol=trojan
+        is_chain_pass=${is_chain_body_no_name%@*}
+        is_chain_server=${is_chain_body_no_name#*@}
+        is_chain_server=${is_chain_server%%\?*}
+        is_chain_pass=$(chain_url_decode "$is_chain_pass")
+        chain_parse_host_port "$is_chain_server"
+        chain_require_host_port
+        chain_build_stream_json
+        is_chain_outbound=$(jq -n \
+            --arg addr "$is_chain_addr" \
+            --argjson port "$is_chain_port" \
+            --arg pass "$is_chain_pass" \
+            --argjson stream "$is_chain_stream" \
+            '{protocol:"trojan",settings:{servers:[{address:$addr,port:$port,password:$pass}]},streamSettings:$stream}')
+        ;;
+    *)
+        err "暂不支持此节点链接: $is_chain_scheme"
+        ;;
+    esac
+}
+
+chain_import() {
+    if [[ $1 =~ ^[a-zA-Z0-9+.-]+:// && ! $2 ]]; then
+        get info
+        is_chain_link=$1
+    else
+        [[ $1 ]] && get info $1 || get info
+        is_chain_link=$2
+    fi
+    [[ ! $is_chain_link ]] && ask string is_chain_link "请输入节点链接:"
+    [[ ! $is_chain_link =~ ^[a-zA-Z0-9+.-]+:// ]] && err "请输入正确的节点链接."
+    chain_parse_share_link "$is_chain_link"
+    chain_apply_current
+    manage restart &
+    _green "\n已为 $is_config_file 导入链式代理: $is_chain_protocol -> $is_chain_addr:$is_chain_port\n"
+}
+
 chain_set() {
+    [[ $1 =~ ^[a-zA-Z0-9+.-]+:// && ! $2 ]] && {
+        chain_import "$1"
+        return
+    }
+    [[ $2 =~ ^[a-zA-Z0-9+.-]+:// ]] && {
+        chain_import "$1" "$2"
+        return
+    }
     [[ $1 ]] && get info $1 || get info
     is_chain_protocol=${2,,}
     is_chain_addr=$3
@@ -1074,16 +1322,19 @@ chain_list() {
 }
 
 chain_menu() {
-    is_tmp_list=("设置链式代理" "查看链式代理" "删除链式代理")
+    is_tmp_list=("导入节点链接" "手动设置链式代理" "查看链式代理" "删除链式代理")
     ask list is_chain_do null "\n请选择链式代理操作:\n"
     case $REPLY in
     1)
-        chain_set
+        chain_import
         ;;
     2)
-        chain_list
+        chain_set
         ;;
     3)
+        chain_list
+        ;;
+    4)
         chain_del
         ;;
     esac
@@ -1099,6 +1350,9 @@ chain() {
         ;;
     del | delete | rm | none | off)
         chain_del $2
+        ;;
+    import)
+        chain_import ${@:2}
         ;;
     set)
         chain_set ${@:2}
