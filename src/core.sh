@@ -57,6 +57,7 @@ mainmenu=(
     "更改配置"
     "查看配置"
     "删除配置"
+    "链式代理"
     "运行管理"
     "更新"
     "卸载"
@@ -105,17 +106,12 @@ change_list=(
     "更改用户名 (Username)"
 )
 servername_list=(
-    www.amazon.com
-    www.ebay.com
-    www.paypal.com
-    www.cloudflare.com
-    dash.cloudflare.com
-    aws.amazon.com
+    video-caps.wetvinfo.com
 )
 
 is_random_ss_method=${ss_method_list[$(shuf -i 4-6 -n1)]}     # random only use ss2022
 is_random_header_type=${header_type_list[$(shuf -i 1-5 -n1)]} # random dont use none
-is_random_servername=${servername_list[$(shuf -i 0-${#servername_list[@]} -n1) - 1]}
+is_random_servername=${servername_list[0]}
 
 msg() {
     echo -e "$@"
@@ -344,6 +340,7 @@ create() {
             is_config_name=$2-${port}.json
         fi
         is_json_file=$is_conf_dir/$is_config_name
+        is_current_dynamic_port_tag=
         # get json
         [[ $is_change || ! $json_str ]] && get protocol $2
         is_listen='listen:"0.0.0.0"'
@@ -353,6 +350,7 @@ create() {
         is_new_json=$(jq '{inbounds:[{tag:"'$is_config_name'",port:'"$port"','"$is_listen"',protocol:"'$is_protocol'",'"$json_str"','"$is_sniffing"'}]}' <<<{})
         if [[ $is_dynamic_port ]]; then
             [[ ! $is_dynamic_port_range ]] && get dynamic-port
+            is_current_dynamic_port_tag=$is_config_name-link.json
             is_new_dynamic_port_json=$(jq '{inbounds:[{tag:"'$is_config_name-link.json'",port:"'$is_dynamic_port_range'",'"$is_listen"',protocol:"vmess",'"$is_stream"','"$is_sniffing"',allocate:{strategy:"random"}}]}' <<<{})
         fi
         [[ $is_test_json ]] && return # tmp test
@@ -363,6 +361,9 @@ create() {
             msg
             [[ $is_new_dynamic_port_json ]] && jq <<<$is_new_dynamic_port_json && msg
             return
+        }
+        [[ $is_change && $is_config_file && -f $is_config_json ]] && {
+            is_keep_chain_outbound=$(jq -c --arg tag "chain-$is_config_file" '.outbounds[]? | select(.tag == $tag) | del(.tag)' $is_config_json)
         }
         # del old file
         [[ $is_config_file ]] && is_no_del_msg=1 && del $is_config_file
@@ -382,6 +383,12 @@ create() {
         # caddy auto tls
         [[ $is_caddy && $host && ! $is_no_auto_tls ]] && {
             create caddy $net
+        }
+        [[ $is_keep_chain_outbound ]] && {
+            is_chain_outbound=$is_keep_chain_outbound
+            is_config_file=$is_config_name
+            chain_apply_current
+            is_api_fail=1
         }
         # restart core
         [[ $is_api_fail ]] && manage restart &
@@ -752,6 +759,7 @@ del() {
             pause
         fi
         api del $is_conf_dir/"$is_config_file" $is_dynamic_port_file &>/dev/null
+        [[ -f $is_config_json ]] && chain_clean_current
         rm -rf $is_conf_dir/"$is_config_file" $is_dynamic_port_file
         [[ $is_api_fail && ! $is_new_json ]] && manage restart &
         [[ ! $is_no_del_msg ]] && _green "\n已删除: $is_config_file\n"
@@ -893,6 +901,212 @@ api() {
     [[ $? != 0 ]] && {
         is_api_fail=1
     }
+}
+
+# chain proxy
+chain_tag() {
+    is_chain_tag=chain-$is_config_file
+}
+
+chain_update_config() {
+    [[ ! -f $is_config_json ]] && err "无法找到 $is_config_json"
+    is_tmp_config=$(mktemp)
+    [[ ! $is_tmp_config ]] && err "无法创建临时文件."
+    if jq "$@" $is_config_json >$is_tmp_config; then
+        cat $is_tmp_config >$is_config_json
+        rm -f $is_tmp_config
+    else
+        rm -f $is_tmp_config
+        err "更新链式代理配置失败."
+    fi
+}
+
+chain_clean_current() {
+    chain_tag
+    chain_update_config --arg tag "$is_chain_tag" '
+        .outbounds = ((.outbounds // []) | map(select(.tag != $tag))) |
+        .routing.rules = ((.routing.rules // []) | map(select((.outboundTag // "") != $tag)))
+    '
+}
+
+chain_apply_current() {
+    chain_tag
+    chain_update_config \
+        --argjson outbound "$is_chain_outbound" \
+        --arg tag "$is_chain_tag" \
+        --arg inbound "$is_config_file" \
+        --arg dynamic "${is_current_dynamic_port_tag:-$is_dynamic_port}" '
+        ($outbound + {tag:$tag}) as $chain_outbound |
+        {type:"field", inboundTag:([$inbound, $dynamic] | map(select(. != ""))), outboundTag:$tag} as $chain_rule |
+        .outbounds = ((.outbounds // []) | map(select(.tag != $tag)) + [$chain_outbound]) |
+        .routing.rules = (
+            ((.routing.rules // []) | map(select((.outboundTag // "") != $tag))) as $rules |
+            if (($rules[0].outboundTag // "") == "api") then
+                [$rules[0], $chain_rule] + ($rules[1:] // [])
+            else
+                [$chain_rule] + $rules
+            end
+        )
+    '
+}
+
+chain_ask_server() {
+    [[ ! $is_chain_addr ]] && ask string is_chain_addr "请输入上游代理地址:"
+    [[ ! $is_chain_p ]] && ask string is_chain_p "请输入上游代理端口:"
+    [[ ! $(is_test port $is_chain_p) ]] && err "请输入正确的上游代理端口, 可选(1-65535)"
+    is_chain_port=$is_chain_p
+}
+
+chain_set() {
+    [[ $1 ]] && get info $1 || get info
+    is_chain_protocol=${2,,}
+    is_chain_addr=$3
+    is_chain_p=$4
+    if [[ ! $is_chain_protocol ]]; then
+        is_tmp_list=(socks http shadowsocks vmess vless trojan)
+        ask list is_chain_protocol null "\n请选择上游代理协议:\n"
+        is_chain_protocol=${is_chain_protocol,,}
+    fi
+    case $is_chain_protocol in
+    socks | http)
+        is_chain_user=$5
+        is_chain_pass=$6
+        chain_ask_server
+        [[ $is_chain_user && ! $is_chain_pass ]] && ask string is_chain_pass "请输入上游代理密码:"
+        if [[ $is_chain_user ]]; then
+            is_chain_outbound=$(jq -n \
+                --arg protocol "$is_chain_protocol" \
+                --arg addr "$is_chain_addr" \
+                --argjson port "$is_chain_port" \
+                --arg user "$is_chain_user" \
+                --arg pass "$is_chain_pass" \
+                '{protocol:$protocol,settings:{servers:[{address:$addr,port:$port,users:[{user:$user,pass:$pass}]}]}}')
+        else
+            is_chain_outbound=$(jq -n \
+                --arg protocol "$is_chain_protocol" \
+                --arg addr "$is_chain_addr" \
+                --argjson port "$is_chain_port" \
+                '{protocol:$protocol,settings:{servers:[{address:$addr,port:$port}]}}')
+        fi
+        ;;
+    ss | shadowsocks)
+        is_chain_protocol=shadowsocks
+        is_chain_method=$5
+        is_chain_pass=$6
+        chain_ask_server
+        if [[ ! $is_chain_method ]]; then
+            ask set_ss_method
+            is_chain_method=$ss_method
+        fi
+        [[ ! $is_chain_pass ]] && ask string is_chain_pass "请输入 Shadowsocks 密码:"
+        is_chain_outbound=$(jq -n \
+            --arg addr "$is_chain_addr" \
+            --argjson port "$is_chain_port" \
+            --arg method "$is_chain_method" \
+            --arg pass "$is_chain_pass" \
+            '{protocol:"shadowsocks",settings:{servers:[{address:$addr,port:$port,method:$method,password:$pass}]}}')
+        ;;
+    vmess | vless)
+        is_chain_uuid=$5
+        chain_ask_server
+        [[ ! $is_chain_uuid ]] && ask string is_chain_uuid "请输入上游代理 UUID:"
+        [[ ! $(is_test uuid $is_chain_uuid) ]] && err "请输入正确的 UUID."
+        if [[ $is_chain_protocol == 'vmess' ]]; then
+            is_chain_outbound=$(jq -n \
+                --arg addr "$is_chain_addr" \
+                --argjson port "$is_chain_port" \
+                --arg uuid "$is_chain_uuid" \
+                '{protocol:"vmess",settings:{vnext:[{address:$addr,port:$port,users:[{id:$uuid,alterId:0}]}]}}')
+        else
+            is_chain_outbound=$(jq -n \
+                --arg addr "$is_chain_addr" \
+                --argjson port "$is_chain_port" \
+                --arg uuid "$is_chain_uuid" \
+                '{protocol:"vless",settings:{vnext:[{address:$addr,port:$port,users:[{id:$uuid,encryption:"none"}]}]}}')
+        fi
+        ;;
+    trojan)
+        is_chain_pass=$5
+        chain_ask_server
+        [[ ! $is_chain_pass ]] && ask string is_chain_pass "请输入 Trojan 密码:"
+        is_chain_outbound=$(jq -n \
+            --arg addr "$is_chain_addr" \
+            --argjson port "$is_chain_port" \
+            --arg pass "$is_chain_pass" \
+            '{protocol:"trojan",settings:{servers:[{address:$addr,port:$port,password:$pass}]}}')
+        ;;
+    *)
+        err "无法识别链式代理协议: $is_chain_protocol"
+        ;;
+    esac
+    chain_apply_current
+    manage restart &
+    _green "\n已为 $is_config_file 设置链式代理: $is_chain_protocol -> $is_chain_addr:$is_chain_port\n"
+}
+
+chain_del() {
+    [[ $1 ]] && get info $1 || get info
+    chain_clean_current
+    manage restart &
+    _green "\n已删除 $is_config_file 的链式代理.\n"
+}
+
+chain_list() {
+    [[ ! -f $is_config_json ]] && err "无法找到 $is_config_json"
+    is_chain_list=$(jq -r '
+        def server($out):
+            if ($out.protocol == "vmess" or $out.protocol == "vless") then
+                ($out.settings.vnext[0] // {})
+            else
+                ($out.settings.servers[0] // {})
+            end;
+        [.routing.rules[]? | select((.outboundTag // "") | startswith("chain-"))] as $rules |
+        if ($rules | length) == 0 then
+            empty
+        else
+            $rules[] as $rule |
+            ([.outbounds[]? | select(.tag == $rule.outboundTag)][0] // {}) as $out |
+            (server($out)) as $server |
+            "配置: \((($rule.inboundTag // []) | if type == "array" then join(",") else tostring end))\n上游: \($out.protocol // "unknown") \($server.address // "-"):\($server.port // "-")\nTag: \($rule.outboundTag)\n"
+        end
+    ' $is_config_json)
+    [[ $is_chain_list ]] && msg "\n$is_chain_list" || msg "\n当前没有链式代理配置.\n"
+}
+
+chain_menu() {
+    is_tmp_list=("设置链式代理" "查看链式代理" "删除链式代理")
+    ask list is_chain_do null "\n请选择链式代理操作:\n"
+    case $REPLY in
+    1)
+        chain_set
+        ;;
+    2)
+        chain_list
+        ;;
+    3)
+        chain_del
+        ;;
+    esac
+}
+
+chain() {
+    case ${1,,} in
+    "" | menu)
+        chain_menu
+        ;;
+    ls | list | show)
+        chain_list
+        ;;
+    del | delete | rm | none | off)
+        chain_del $2
+        ;;
+    set)
+        chain_set ${@:2}
+        ;;
+    *)
+        chain_set $@
+        ;;
+    esac
 }
 
 # add a config
@@ -1743,25 +1957,28 @@ is_main_menu() {
         del
         ;;
     5)
+        chain_menu
+        ;;
+    6)
         ask list is_do_manage "启动 停止 重启"
         manage $REPLY &
         msg "\n管理状态执行: $(_green $is_do_manage)\n"
         ;;
-    6)
+    7)
         is_tmp_list=("更新$is_core_name" "更新脚本")
         [[ $is_caddy ]] && is_tmp_list+=("更新Caddy")
         ask list is_do_update null "\n请选择更新:\n"
         update $REPLY
         ;;
-    7)
+    8)
         uninstall
         ;;
-    8)
+    9)
         msg
         load help.sh
         show_help
         ;;
-    9)
+    10)
         ask list is_do_other "启用BBR 查看日志 查看错误日志 测试运行 重装脚本 设置DNS"
         case $REPLY in
         1)
@@ -1786,7 +2003,7 @@ is_main_menu() {
             ;;
         esac
         ;;
-    10)
+    11)
         load help.sh
         about
         ;;
@@ -1820,6 +2037,9 @@ main() {
     client | genc)
         [[ $1 == 'client' ]] && is_full_client=1
         create client $2
+        ;;
+    chain | proxy-chain | chain-proxy)
+        chain ${@:2}
         ;;
     d | del | rm)
         del $2

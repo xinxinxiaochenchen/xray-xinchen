@@ -50,7 +50,7 @@
 使用：`xray help`
 
 ```
-Xray script v1.21 by 233boy
+Xray script v1.34 by 233boy
 Usage: xray [options]... [args]...
 
 基本:
@@ -67,6 +67,7 @@ Usage: xray [options]... [args]...
    i, info [name]                                  查看配置
    qr [name]                                       二维码信息
    url [name]                                      URL 信息
+   chain [set|list|del] ...                         为单个配置设置链式代理
    log                                             查看日志
    logerr                                          查看错误日志
 
@@ -88,6 +89,9 @@ Usage: xray [options]... [args]...
 
 进阶:
    dns [...]                                       设置 DNS
+   chain set [name] [protocol] [addr] [port] ...    设置链式代理
+   chain del [name]                                删除链式代理
+   chain list                                      查看链式代理
    dd, ddel [name...]                              删除多个配置**
    fix [name]                                      修复一个配置
    fix-all                                         修复全部配置
