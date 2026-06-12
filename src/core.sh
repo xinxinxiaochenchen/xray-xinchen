@@ -1087,6 +1087,7 @@ chain_build_stream_json() {
     is_chain_service_name=$(chain_url_value serviceName "$is_chain_query")
     is_chain_public_key=$(chain_url_value pbk "$is_chain_query")
     is_chain_short_id=$(chain_url_value sid "$is_chain_query")
+    is_chain_spider_x=$(chain_url_value spx "$is_chain_query")
     is_chain_fingerprint=$(chain_url_value fp "$is_chain_query")
     is_chain_flow=$(chain_url_value flow "$is_chain_query")
     [[ ! $is_chain_fingerprint ]] && is_chain_fingerprint=chrome
@@ -1099,11 +1100,12 @@ chain_build_stream_json() {
         --arg service "$is_chain_service_name" \
         --arg pbk "$is_chain_public_key" \
         --arg sid "$is_chain_short_id" \
+        --arg spx "$is_chain_spider_x" \
         --arg fp "$is_chain_fingerprint" '
         {network:$network}
         + (if $security == "none" or $security == "" then {} else {security:$security} end)
         + (if $security == "tls" then {tlsSettings:({} + (if $sni != "" then {serverName:$sni} else {} end))} else {} end)
-        + (if $security == "reality" then {realitySettings:({fingerprint:$fp,publicKey:$pbk,shortId:$sid} + (if $sni != "" then {serverName:$sni} else {} end))} else {} end)
+        + (if $security == "reality" then {realitySettings:({fingerprint:$fp,publicKey:$pbk,shortId:$sid} + (if $sni != "" then {serverName:$sni} else {} end) + (if $spx != "" then {spiderX:$spx} else {} end))} else {} end)
         + (if $network == "ws" then {wsSettings:({path:$path} + (if $host != "" then {headers:{Host:$host}} else {} end))} else {} end)
         + (if $network == "grpc" then {grpcSettings:{serviceName:$service}} else {} end)
         + (if $network == "xhttp" or $network == "splithttp" then {xhttpSettings:({path:$path} + (if $host != "" then {host:$host} else {} end))} else {} end)
@@ -2092,7 +2094,7 @@ info() {
             is_can_change=(0 1 5 10 11)
             is_info_show=(0 1 2 3 15 8 16 17 18)
             is_info_str=($is_protocol $is_addr $port $uuid xtls-rprx-vision reality $is_servername "chrome" $is_public_key)
-            is_url="$is_protocol://$uuid@$is_addr:$port?encryption=none&security=reality&flow=xtls-rprx-vision&type=tcp&sni=$is_servername&pbk=$is_public_key&fp=chrome#233boy-$net-$is_addr"
+            is_url="$is_protocol://$uuid@$is_addr:$port?encryption=none&security=reality&flow=xtls-rprx-vision&type=tcp&sni=$is_servername&pbk=$is_public_key&fp=chrome&sid=&spx=%2F#233boy-$net-$is_addr"
         fi
         ;;
     ss)
