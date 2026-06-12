@@ -56,7 +56,7 @@ bash <(wget -qO- https://raw.githubusercontent.com/xinxinxiaochenchen/xray-xinch
 使用：`xray help`
 
 ```
-Xray script v1.36 by 233boy
+Xray script v1.37 by 233boy
 Usage: xray [options]... [args]...
 
 基本:

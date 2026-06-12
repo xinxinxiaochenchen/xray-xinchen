@@ -931,6 +931,9 @@ chain_clean_current() {
 
 chain_apply_current() {
     chain_tag
+    is_chain_backup=$(mktemp)
+    [[ ! $is_chain_backup ]] && err "无法创建临时文件."
+    cp -f $is_config_json $is_chain_backup
     chain_update_config \
         --argjson outbound "$is_chain_outbound" \
         --arg tag "$is_chain_tag" \
@@ -948,6 +951,17 @@ chain_apply_current() {
             end
         )
     '
+    if [[ -x $is_core_bin ]]; then
+        $is_core_bin -test -c $is_config_json -confdir $is_conf_dir &>/tmp/${is_core}-chain-test.log
+        if [[ $? != 0 ]]; then
+            cp -f $is_chain_backup $is_config_json
+            rm -f $is_chain_backup
+            warn "链式代理配置测试失败, 已自动恢复原配置."
+            [[ -f /tmp/${is_core}-chain-test.log ]] && cat /tmp/${is_core}-chain-test.log
+            err "请检查节点链接或上游代理参数."
+        fi
+    fi
+    rm -f $is_chain_backup
 }
 
 chain_ask_server() {
@@ -1077,7 +1091,7 @@ chain_parse_share_link() {
             --argjson port "$is_chain_port" \
             --arg method "$is_chain_method" \
             --arg pass "$is_chain_pass" \
-            '{protocol:"shadowsocks",settings:{servers:[{address:$addr,port:$port,method:$method,password:$pass}]}}')
+            '{protocol:"shadowsocks",settings:{address:$addr,port:$port,method:$method,password:$pass}}')
         ;;
     socks | socks5 | http)
         is_chain_protocol=${is_chain_scheme,,}
@@ -1252,7 +1266,7 @@ chain_set() {
             --argjson port "$is_chain_port" \
             --arg method "$is_chain_method" \
             --arg pass "$is_chain_pass" \
-            '{protocol:"shadowsocks",settings:{servers:[{address:$addr,port:$port,method:$method,password:$pass}]}}')
+            '{protocol:"shadowsocks",settings:{address:$addr,port:$port,method:$method,password:$pass}}')
         ;;
     vmess | vless)
         is_chain_uuid=$5
@@ -1305,6 +1319,8 @@ chain_list() {
         def server($out):
             if ($out.protocol == "vmess" or $out.protocol == "vless") then
                 ($out.settings.vnext[0] // {})
+            elif $out.protocol == "shadowsocks" then
+                ($out.settings // {})
             else
                 ($out.settings.servers[0] // {})
             end;
