@@ -45,12 +45,18 @@
 
 安装及使用：https://233boy.com/xray/xray-script/
 
+# 安装
+
+```
+bash <(wget -qO- https://raw.githubusercontent.com/xinxinxiaochenchen/xray-xinchen/main/install.sh)
+```
+
 # 帮助
 
 使用：`xray help`
 
 ```
-Xray script v1.34 by 233boy
+Xray script v1.35 by 233boy
 Usage: xray [options]... [args]...
 
 基本:
