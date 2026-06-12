@@ -362,12 +362,9 @@ create() {
             [[ $is_new_dynamic_port_json ]] && jq <<<$is_new_dynamic_port_json && msg
             return
         }
-        if [[ $is_change && $is_config_file && -f $is_config_json ]]; then
+        [[ $is_change && $is_config_file && -f $is_config_json ]] && {
             is_keep_chain_outbound=$(jq -c --arg tag "chain-$is_config_file" '.outbounds[]? | select(.tag == $tag) | del(.tag)' $is_config_json)
-            is_keep_direct_rule=$(jq -r --arg inbound "$is_config_file" '
-                any(.routing.rules[]?; (.outboundTag == "direct") and ((.inboundTag // []) | if type == "array" then index($inbound) else . == $inbound end))
-            ' $is_config_json)
-        fi
+        }
         # del old file
         [[ $is_config_file ]] && is_no_del_msg=1 && del $is_config_file
         # save json to file
@@ -392,8 +389,7 @@ create() {
             is_config_file=$is_config_name
             chain_apply_current
             is_api_fail=1
-        }
-        [[ $is_keep_direct_rule == 'true' ]] && {
+        } || {
             is_config_file=$is_config_name
             chain_direct_current
             is_api_fail=1
@@ -1367,16 +1363,9 @@ chain_set() {
 
 chain_del() {
     [[ $1 ]] && get info $1 || get info
-    chain_clean_current
-    manage restart &
-    _green "\n已清除 $is_config_file 的单独出口设置.\n"
-}
-
-chain_direct() {
-    [[ $1 ]] && get info $1 || get info
     chain_direct_current
     manage restart &
-    _green "\n已设置 $is_config_file 单独直连 (direct).\n"
+    _green "\n已删除 $is_config_file 的链式代理, 当前为 direct.\n"
 }
 
 chain_list() {
@@ -1404,11 +1393,11 @@ chain_list() {
             end
         end
     ' $is_config_json)
-    [[ $is_chain_list ]] && msg "\n$is_chain_list" || msg "\n当前没有单独出口设置.\n"
+    [[ $is_chain_list ]] && msg "\n$is_chain_list" || msg "\n当前没有链式代理配置; 新配置默认 direct.\n"
 }
 
 chain_menu() {
-    is_tmp_list=("导入节点链接" "手动设置链式代理" "设置直连 direct" "查看出口设置" "清除单独设置")
+    is_tmp_list=("导入节点链接" "手动设置链式代理" "查看链式代理" "删除链式代理")
     ask list is_chain_do null "\n请选择链式代理操作:\n"
     case $REPLY in
     1)
@@ -1418,12 +1407,9 @@ chain_menu() {
         chain_set
         ;;
     3)
-        chain_direct
-        ;;
-    4)
         chain_list
         ;;
-    5)
+    4)
         chain_del
         ;;
     esac
@@ -1439,9 +1425,6 @@ chain() {
         ;;
     del | delete | rm | none | off)
         chain_del $2
-        ;;
-    direct | freedom)
-        chain_direct $2
         ;;
     import)
         chain_import ${@:2}

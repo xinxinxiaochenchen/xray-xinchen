@@ -56,7 +56,7 @@ bash <(wget -qO- https://raw.githubusercontent.com/xinxinxiaochenchen/xray-xinch
 使用：`xray help`
 
 ```
-Xray script v1.38 by 233boy
+Xray script v1.39 by 233boy
 Usage: xray [options]... [args]...
 
 基本:
@@ -73,7 +73,7 @@ Usage: xray [options]... [args]...
    i, info [name]                                  查看配置
    qr [name]                                       二维码信息
    url [name]                                      URL 信息
-   chain [import|set|direct|list|del] ...           为单个配置设置链式代理或直连
+   chain [import|set|list|del] ...                  为单个配置设置或删除链式代理
    log                                             查看日志
    logerr                                          查看错误日志
 
@@ -97,9 +97,8 @@ Usage: xray [options]... [args]...
    dns [...]                                       设置 DNS
    chain import [name] [url]                        通过节点链接导入链式代理
    chain set [name] [protocol] [addr] [port] ...    设置链式代理
-   chain direct [name]                              设置配置单独直连
-   chain del [name]                                清除单独出口设置
-   chain list                                      查看单独出口设置
+   chain del [name]                                删除链式代理并恢复 direct
+   chain list                                      查看链式代理和 direct 状态
    dd, ddel [name...]                              删除多个配置**
    fix [name]                                      修复一个配置
    fix-all                                         修复全部配置
