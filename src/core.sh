@@ -933,10 +933,11 @@ chain_clean_current() {
         --arg dynamic "${is_current_dynamic_port_tag:-$is_dynamic_port}" '
         def has_inbound($name):
             ((.inboundTag // []) | if type == "array" then index($name) != null else . == $name end);
+        def has_current_inbound:
+            has_inbound($inbound) or ($dynamic != "" and $dynamic != "null" and has_inbound($dynamic));
         .outbounds = ((.outbounds // []) | map(select(.tag != $tag))) |
         .routing.rules = ((.routing.rules // []) | map(select(
-            ((.outboundTag // "") != $tag) and
-            (((.outboundTag == "direct") and (has_inbound($inbound) or ($dynamic != "" and has_inbound($dynamic)))) | not)
+            ((.outboundTag // "") != $tag) and (has_current_inbound | not)
         )))
     '
 }
@@ -953,13 +954,14 @@ chain_apply_current() {
         --arg dynamic "${is_current_dynamic_port_tag:-$is_dynamic_port}" '
         def has_inbound($name):
             ((.inboundTag // []) | if type == "array" then index($name) != null else . == $name end);
+        def has_current_inbound:
+            has_inbound($inbound) or ($dynamic != "" and $dynamic != "null" and has_inbound($dynamic));
         ($outbound + {tag:$tag}) as $chain_outbound |
-        {type:"field", inboundTag:([$inbound, $dynamic] | map(select(. != ""))), outboundTag:$tag} as $chain_rule |
+        {type:"field", inboundTag:([$inbound, $dynamic] | map(select(. != "" and . != "null"))), outboundTag:$tag} as $chain_rule |
         .outbounds = ((.outbounds // []) | map(select(.tag != $tag)) + [$chain_outbound]) |
         .routing.rules = (
             ((.routing.rules // []) | map(select(
-                ((.outboundTag // "") != $tag) and
-                (((.outboundTag == "direct") and (has_inbound($inbound) or ($dynamic != "" and has_inbound($dynamic)))) | not)
+                ((.outboundTag // "") != $tag) and (has_current_inbound | not)
             ))) as $rules |
             if (($rules[0].outboundTag // "") == "api") then
                 [$rules[0], $chain_rule] + ($rules[1:] // [])
@@ -992,12 +994,13 @@ chain_direct_current() {
         --arg dynamic "${is_current_dynamic_port_tag:-$is_dynamic_port}" '
         def has_inbound($name):
             ((.inboundTag // []) | if type == "array" then index($name) != null else . == $name end);
-        {type:"field", inboundTag:([$inbound, $dynamic] | map(select(. != ""))), outboundTag:"direct"} as $direct_rule |
+        def has_current_inbound:
+            has_inbound($inbound) or ($dynamic != "" and $dynamic != "null" and has_inbound($dynamic));
+        {type:"field", inboundTag:([$inbound, $dynamic] | map(select(. != "" and . != "null"))), outboundTag:"direct"} as $direct_rule |
         .outbounds = ((.outbounds // []) | map(select(.tag != $tag))) |
         .routing.rules = (
             ((.routing.rules // []) | map(select(
-                ((.outboundTag // "") != $tag) and
-                (((.outboundTag == "direct") and (has_inbound($inbound) or ($dynamic != "" and has_inbound($dynamic)))) | not)
+                ((.outboundTag // "") != $tag) and (has_current_inbound | not)
             ))) as $rules |
             if (($rules[0].outboundTag // "") == "api") then
                 [$rules[0], $direct_rule] + ($rules[1:] // [])
