@@ -1,4 +1,4 @@
-# Xray Xinchen Script
+# Xray  Script
 
 基于 233boy/Xray 修改的一键安装与管理脚本，当前分支重点增强了「按配置单独设置链式代理」能力。
 
